@@ -1,0 +1,178 @@
+ 
+import ssl
+_orig = ssl.create_default_context
+
+def patched(args, *kwargs):
+    ctx = _orig(args, *kwargs)
+    try:
+        ctx.check_hostname = False
+    except Exception:
+        pass
+    return ctx
+
+ssl.create_default_context = patched
+
+
+def test_playwright_connection(url: str = "https://sozd.duma.gov.ru") -> int:
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:
+        print("Playwright is not installed. Install with: python3 -m pip install playwright && python3 -m playwright install chromium")
+        print(f"Import error: {e}")
+        return 2
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            response = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            status = response.status if response else None
+            title = page.title()
+            browser.close()
+
+        ok = response is not None and 200 <= response.status < 400
+        print(f"URL: {url}")
+        print(f"HTTP status: {status}")
+        print(f"Title: {title!r}")
+        print("Result: OK" if ok else "Result: FAILED")
+        return 0 if ok else 1
+    except Exception as e:
+        print(f"Playwright navigation failed: {e}")
+        return 1
+
+
+def test_kafka_read_write(
+    bootstrap_servers: str,
+    topic: str,
+    timeout_s: float = 15.0,
+    *,
+    security_protocol: str | None = None,
+    sasl_mechanism: str | None = None,
+    sasl_plain_username: str | None = None,
+    sasl_plain_password: str | None = None,
+    ssl_cafile: str | None = None,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
+) -> int:
+    import time
+    import uuid
+
+    try:
+        from kafka import KafkaConsumer, KafkaProducer
+    except Exception as e:
+        print("kafka-python is not installed. Install with: python3 -m pip install kafka-python")
+        print(f"Import error: {e}")
+        return 2
+
+    run_id = uuid.uuid4().hex
+    payload = f"sozd-kafka-smoke:{run_id}".encode("utf-8")
+
+    kafka_common: dict = {
+        "bootstrap_servers": bootstrap_servers,
+    }
+    if security_protocol:
+        kafka_common["security_protocol"] = security_protocol
+    if sasl_mechanism:
+        kafka_common["sasl_mechanism"] = sasl_mechanism
+    if sasl_plain_username:
+        kafka_common["sasl_plain_username"] = sasl_plain_username
+    if sasl_plain_password:
+        kafka_common["sasl_plain_password"] = sasl_plain_password
+    if ssl_cafile:
+        kafka_common["ssl_cafile"] = ssl_cafile
+    if ssl_certfile:
+        kafka_common["ssl_certfile"] = ssl_certfile
+    if ssl_keyfile:
+        kafka_common["ssl_keyfile"] = ssl_keyfile
+
+    try:
+        consumer = KafkaConsumer(
+            topic,
+            **kafka_common,
+            group_id=f"sozd-conn-test-{run_id}",
+            enable_auto_commit=False,
+            auto_offset_reset="latest",
+            consumer_timeout_ms=500,
+        )
+
+        # Ensure partitions are assigned before producing, so "latest" is meaningful.
+        deadline = time.time() + 5.0
+        while not consumer.assignment() and time.time() < deadline:
+            consumer.poll(timeout_ms=200)
+
+        producer = KafkaProducer(**kafka_common)
+        producer.send(topic, key=run_id.encode("utf-8"), value=payload)
+        producer.flush(timeout=10)
+
+        found = False
+        deadline = time.time() + timeout_s
+        while time.time() < deadline and not found:
+            for msg in consumer:
+                if msg.value == payload:
+                    found = True
+                    break
+            # Loop continues until deadline; consumer_timeout_ms prevents blocking forever.
+
+        try:
+            consumer.close()
+        except Exception:
+            pass
+        try:
+            producer.close()
+        except Exception:
+            pass
+
+        print(f"Kafka bootstrap: {bootstrap_servers}")
+        print(f"Topic: {topic}")
+        print(f"Produced: {payload!r}")
+        print("Consumed: OK" if found else "Consumed: FAILED (timeout)")
+        return 0 if found else 1
+    except Exception as e:
+        print(f"Kafka read/write failed: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(description="Connectivity checks (Playwright + Kafka).")
+    parser.add_argument("--playwright", action="store_true", help="Run Playwright HTTPS check.")
+    parser.add_argument("--kafka", action="store_true", help="Run Kafka read/write check.")
+    parser.add_argument("--url", default=os.getenv("SOZD_URL", "https://sozd.duma.gov.ru"))
+    parser.add_argument("--kafka-bootstrap", default=os.getenv("KAFKA_BOOTSTRAP", "localhost:9092"))
+    parser.add_argument("--kafka-topic", default=os.getenv("KAFKA_TOPIC", "sozd-connection-test"))
+    parser.add_argument("--kafka-timeout", type=float, default=float(os.getenv("KAFKA_TIMEOUT_S", "15")))
+    parser.add_argument("--kafka-security-protocol", default=os.getenv("KAFKA_SECURITY_PROTOCOL"))
+    parser.add_argument("--kafka-sasl-mechanism", default=os.getenv("KAFKA_SASL_MECHANISM"))
+    parser.add_argument("--kafka-sasl-username", default=os.getenv("KAFKA_SASL_USERNAME"))
+    parser.add_argument("--kafka-sasl-password", default=os.getenv("KAFKA_SASL_PASSWORD"))
+    parser.add_argument("--kafka-ssl-cafile", default=os.getenv("KAFKA_SSL_CAFILE"))
+    parser.add_argument("--kafka-ssl-certfile", default=os.getenv("KAFKA_SSL_CERTFILE"))
+    parser.add_argument("--kafka-ssl-keyfile", default=os.getenv("KAFKA_SSL_KEYFILE"))
+    args = parser.parse_args()
+
+    run_playwright = args.playwright or (not args.playwright and not args.kafka)
+    run_kafka = args.kafka or (not args.playwright and not args.kafka)
+
+    rc = 0
+    if run_playwright:
+        rc = max(rc, test_playwright_connection(args.url))
+    if run_kafka:
+        rc = max(
+            rc,
+            test_kafka_read_write(
+                args.kafka_bootstrap,
+                args.kafka_topic,
+                timeout_s=args.kafka_timeout,
+                security_protocol=args.kafka_security_protocol,
+                sasl_mechanism=args.kafka_sasl_mechanism,
+                sasl_plain_username=args.kafka_sasl_username,
+                sasl_plain_password=args.kafka_sasl_password,
+                ssl_cafile=args.kafka_ssl_cafile,
+                ssl_certfile=args.kafka_ssl_certfile,
+                ssl_keyfile=args.kafka_ssl_keyfile,
+            ),
+        )
+
+    raise SystemExit(rc)

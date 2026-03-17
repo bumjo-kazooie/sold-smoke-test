@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sozd-smoke-test
+  labels:
+    app: sozd-smoke-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sozd-smoke-test
+  template:
+    metadata:
+      labels:
+        app: sozd-smoke-test
+    spec:
+      containers:
+        - name: smoke-test
+          image: sozd-smoke-test:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SOZD_URL
+              value: "https://sozd.duma.gov.ru"
+
+            - name: KAFKA_BOOTSTRAP
+              value: "kafka:9092"
+            - name: KAFKA_TOPIC
+              value: "sozd-connection-test"
+            - name: KAFKA_TIMEOUT_S
+              value: "15"
+
+            # Optional security/auth (prefer using Secrets in real clusters)
+            - name: KAFKA_SECURITY_PROTOCOL
+              value: ""
+            - name: KAFKA_SASL_MECHANISM
+              value: ""
+            - name: KAFKA_SASL_USERNAME
+              value: ""
+            - name: KAFKA_SASL_PASSWORD
+              value: ""
+            - name: KAFKA_SSL_CAFILE
+              value: ""
+            - name: KAFKA_SSL_CERTFILE
+              value: ""
+            - name: KAFKA_SSL_KEYFILE
+              value: ""
+
+          # By default smoke_test.py runs both Playwright + Kafka checks.
+          args: []
