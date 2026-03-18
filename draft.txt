@@ -1,0 +1,14 @@
+ARG MIRROR_BASE="http://apt-mirror.company.local"
+ARG TESSERACT_OCR_DEB="repo/debian/debian_yandex/pool/main/t/tesseract/tesseract-ocr_5.5.0-1+b3_amd64.deb"
+ARG TESSERACT_RUS_DEB="repo/debian/debian_yandex/pool/main/t/tesseract/tesseract-ocr-rus_<VERSION>_all.deb"
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && curl -fsSL "${MIRROR_BASE}/${TESSERACT_OCR_DEB}" -o /tmp/tesseract-ocr.deb \
+ && curl -fsSL "${MIRROR_BASE}/${TESSERACT_RUS_DEB}" -o /tmp/tesseract-ocr-rus.deb \
+ && dpkg -i /tmp/tesseract-ocr.deb /tmp/tesseract-ocr-rus.deb || true \
+ && apt-get -f install -y \
+ && rm -f /tmp/tesseract-ocr.deb /tmp/tesseract-ocr-rus.deb \
+ && rm -rf /var/lib/apt/lists/* \
+ && tesseract --version \
+ && tesseract --list-langs | grep -E '^rus$'
