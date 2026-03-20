@@ -1,4 +1,4 @@
- 
+  
 import ssl
 _orig = ssl.create_default_context
 
@@ -13,22 +13,25 @@ def patched(*args, **kwargs):
     except Exception:
         pass
 
-    # Kafka sometimes fails SASL_SSL TLS handshakes if legacy TLS is offered/negotiated.
-    # Align with the fix from kafka-python issue #1206: disable TLSv1/TLSv1.1 by requiring TLSv1.2+.
-    try:
-        # Python 3.7+: prefer minimum_version for correctness.
-        if hasattr(ctx, "minimum_version"):
-            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        else:
-            # Fallback for older Python builds: explicitly disable legacy protocol versions.
-            if hasattr(ssl, "OP_NO_TLSv1"):
-                ctx.options |= ssl.OP_NO_TLSv1
-            if hasattr(ssl, "OP_NO_TLSv1_1"):
-                ctx.options |= ssl.OP_NO_TLSv1_1
-    except Exception:
-        pass
-
     import os
+
+    # Kafka sometimes fails SASL_SSL TLS handshakes if legacy TLS is offered/negotiated.
+    # The previously working behavior should remain the default, so we only enforce TLSv1.2+
+    # when explicitly enabled.
+    if os.getenv("KAFKA_ENFORCE_TLS12", "0").lower() in ("1", "true", "yes"):
+        try:
+            # Python 3.7+: prefer minimum_version for correctness.
+            if hasattr(ctx, "minimum_version"):
+                ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            else:
+                # Fallback for older Python builds: explicitly disable legacy protocol versions.
+                if hasattr(ssl, "OP_NO_TLSv1"):
+                    ctx.options |= ssl.OP_NO_TLSv1
+                if hasattr(ssl, "OP_NO_TLSv1_1"):
+                    ctx.options |= ssl.OP_NO_TLSv1_1
+        except Exception:
+            pass
+
     if os.getenv("KAFKA_INSECURE_SKIP_VERIFY", "0").lower() in ("1", "true", "yes"):
         # Disable certificate chain validation (debug only; reduces security).
         try:
