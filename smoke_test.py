@@ -190,15 +190,36 @@ if __name__ == "__main__":
     setup_logging()
 
     parser = argparse.ArgumentParser(description="Connectivity checks (Playwright + Kafka).")
-    parser.add_argument("--playwright", action="store_true", help="Run Playwright HTTPS check.")
-    parser.add_argument("--kafka", action="store_true", help="Run Kafka read/write check.")
+    def env_flag(name: str, default: str = "0") -> bool:
+        value = os.getenv(name, default).strip().lower()
+        return value in ("1", "true", "yes", "y", "on")
+
+    # For these boolean flags we use default=None so env vars can provide defaults.
+    # If CLI flags are passed, they override env defaults by setting the value to True.
+    parser.add_argument(
+        "--playwright",
+        action="store_true",
+        default=None,
+        help="Run Playwright HTTPS check. Env default: RUN_PLAYWRIGHT=1",
+    )
+    parser.add_argument(
+        "--kafka",
+        action="store_true",
+        default=None,
+        help="Run Kafka read/write check. Env default: RUN_KAFKA=1",
+    )
     parser.add_argument(
         "--interval-s",
         type=float,
-        default=float(os.getenv("INTERVAL_S", "600")),
-        help="How often to re-run checks (seconds). Default: 600 (10 min).",
+        default=float(os.getenv("INTERVAL_S", "300")),
+        help="How often to re-run checks (seconds). Default: 300 (5 min).",
     )
-    parser.add_argument("--once", action="store_true", help="Run checks once and exit.")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        default=None,
+        help="Run checks once and exit. Env default: RUN_ONCE=1",
+    )
     parser.add_argument("--url", default=os.getenv("SOZD_URL", "https://sozd.duma.gov.ru"))
     parser.add_argument("--kafka-bootstrap", default=os.getenv("KAFKA_BOOTSTRAP", "localhost:9092"))
     parser.add_argument("--kafka-topic", default=os.getenv("KAFKA_TOPIC", "sozd-connection-test"))
@@ -211,6 +232,14 @@ if __name__ == "__main__":
     parser.add_argument("--kafka-ssl-certfile", default=os.getenv("KAFKA_SSL_CERTFILE"))
     parser.add_argument("--kafka-ssl-keyfile", default=os.getenv("KAFKA_SSL_KEYFILE"))
     args = parser.parse_args()
+
+    # Fill in boolean defaults from env vars only when CLI flags were not provided.
+    if args.playwright is None:
+        args.playwright = env_flag("RUN_PLAYWRIGHT", "0")
+    if args.kafka is None:
+        args.kafka = env_flag("RUN_KAFKA", "0")
+    if args.once is None:
+        args.once = env_flag("RUN_ONCE", "0")
 
     run_playwright = args.playwright or (not args.playwright and not args.kafka)
     run_kafka = args.kafka or (not args.playwright and not args.kafka)
