@@ -108,6 +108,7 @@ def test_kafka_read_write(
     ssl_certfile: str | None = None,
     ssl_keyfile: str | None = None,
 ) -> int:
+    import os
     import time
     import uuid
 
@@ -139,6 +140,10 @@ def test_kafka_read_write(
         kafka_common["ssl.certificate.location"] = ssl_certfile
     if ssl_keyfile:
         kafka_common["ssl.key.location"] = ssl_keyfile
+    if os.getenv("KAFKA_INSECURE_SKIP_VERIFY", "0").lower() in ("1", "true", "yes"):
+        # confluent-kafka uses librdkafka SSL settings; Python ssl monkey-patches do not apply.
+        kafka_common["enable.ssl.certificate.verification"] = "false"
+        kafka_common["ssl.endpoint.identification.algorithm"] = "none"
 
     try:
         producer_conf = dict(kafka_common)
