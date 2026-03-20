@@ -1,5 +1,6 @@
   
 import ssl
+import logging
 _orig = ssl.create_default_context
 
 def patched(*args, **kwargs):
@@ -68,8 +69,10 @@ def test_playwright_connection(url: str = "https://sozd.duma.gov.ru") -> int:
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
-        print("Playwright is not installed. Install with: python3 -m pip install playwright && python3 -m playwright install chromium")
-        print(f"Import error: {e}")
+        logging.error(
+            "Playwright is not installed. Install with: python3 -m pip install playwright && python3 -m playwright install chromium"
+        )
+        logging.error("Import error: %s", e)
         return 2
 
     try:
@@ -82,13 +85,13 @@ def test_playwright_connection(url: str = "https://sozd.duma.gov.ru") -> int:
             browser.close()
 
         ok = response is not None and 200 <= response.status < 400
-        print(f"URL: {url}")
-        print(f"HTTP status: {status}")
-        print(f"Title: {title!r}")
-        print("Result: OK" if ok else "Result: FAILED")
+        logging.info("URL: %s", url)
+        logging.info("HTTP status: %s", status)
+        logging.info("Title: %r", title)
+        logging.info("Result: %s", "OK" if ok else "FAILED")
         return 0 if ok else 1
     except Exception as e:
-        print(f"Playwright navigation failed: {e}")
+        logging.exception("Playwright navigation failed: %s", e)
         return 1
 
 
@@ -111,8 +114,8 @@ def test_kafka_read_write(
     try:
         from kafka import KafkaConsumer, KafkaProducer
     except Exception as e:
-        print("kafka-python is not installed. Install with: python3 -m pip install kafka-python")
-        print(f"Import error: {e}")
+        logging.error("kafka-python is not installed. Install with: python3 -m pip install kafka-python")
+        logging.error("Import error: %s", e)
         return 2
 
     run_id = uuid.uuid4().hex
@@ -174,12 +177,12 @@ def test_kafka_read_write(
             pass
 
         print(f"Kafka bootstrap: {bootstrap_servers}")
-        print(f"Topic: {topic}")
-        print(f"Produced: {payload!r}")
-        print("Consumed: OK" if found else "Consumed: FAILED (timeout)")
+        logging.info("Topic: %s", topic)
+        logging.info("Produced: %r", payload)
+        logging.info("Consumed: %s", "OK" if found else "FAILED (timeout)")
         return 0 if found else 1
     except Exception as e:
-        print(f"Kafka read/write failed: {e}")
+        logging.exception("Kafka read/write failed: %s", e)
         return 1
 
 
@@ -252,7 +255,7 @@ if __name__ == "__main__":
 
     while True:
         run_no += 1
-        print(f"[smoke_test] run #{run_no} starting")
+        logging.info("[smoke_test] run #%s starting", run_no)
 
         rc = 0
         if run_playwright:
@@ -274,7 +277,7 @@ if __name__ == "__main__":
                 ),
             )
 
-        print(f"[smoke_test] run #{run_no} finished rc={rc}")
+        logging.info("[smoke_test] run #%s finished rc=%s", run_no, rc)
         if once:
             raise SystemExit(rc)
 
