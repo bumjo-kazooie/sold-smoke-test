@@ -112,60 +112,73 @@ def test_kafka_read_write(
     import uuid
 
     try:
-        from kafka import KafkaConsumer, KafkaProducer
+        from confluent_kafka import Consumer, KafkaError, Producer
     except Exception as e:
-        logging.error("kafka-python is not installed. Install with: python3 -m pip install kafka-python")
+        logging.error("confluent-kafka is not installed. Install with: python3 -m pip install confluent-kafka")
         logging.error("Import error: %s", e)
         return 2
 
     run_id = uuid.uuid4().hex
     payload = f"sozd-kafka-smoke:{run_id}".encode("utf-8")
+    key = run_id.encode("utf-8")
 
-    kafka_common: dict = {
-        "bootstrap_servers": bootstrap_servers,
+    kafka_common: dict[str, str] = {
+        "bootstrap.servers": bootstrap_servers,
     }
     if security_protocol:
-        kafka_common["security_protocol"] = security_protocol
+        kafka_common["security.protocol"] = security_protocol
     if sasl_mechanism:
-        kafka_common["sasl_mechanism"] = sasl_mechanism
+        kafka_common["sasl.mechanism"] = sasl_mechanism
     if sasl_plain_username:
-        kafka_common["sasl_plain_username"] = sasl_plain_username
+        kafka_common["sasl.username"] = sasl_plain_username
     if sasl_plain_password:
-        kafka_common["sasl_plain_password"] = sasl_plain_password
+        kafka_common["sasl.password"] = sasl_plain_password
     if ssl_cafile:
-        kafka_common["ssl_cafile"] = ssl_cafile
+        kafka_common["ssl.ca.location"] = ssl_cafile
     if ssl_certfile:
-        kafka_common["ssl_certfile"] = ssl_certfile
+        kafka_common["ssl.certificate.location"] = ssl_certfile
     if ssl_keyfile:
-        kafka_common["ssl_keyfile"] = ssl_keyfile
+        kafka_common["ssl.key.location"] = ssl_keyfile
 
     try:
-        consumer = KafkaConsumer(
-            topic,
-            **kafka_common,
-            group_id=f"sozd-conn-test-{run_id}",
-            enable_auto_commit=False,
-            auto_offset_reset="latest",
-            consumer_timeout_ms=500,
+        producer_conf = dict(kafka_common)
+        consumer_conf = dict(kafka_common)
+        consumer_conf.update(
+            {
+                "group.id": f"sozd-conn-test-{run_id}",
+                "enable.auto.commit": False,
+                "auto.offset.reset": "latest",
+            }
         )
 
-        # Ensure partitions are assigned before producing, so "latest" is meaningful.
-        deadline = time.time() + 5.0
-        while not consumer.assignment() and time.time() < deadline:
-            consumer.poll(timeout_ms=200)
+        consumer = Consumer(consumer_conf)
+        consumer.subscribe([topic])
 
-        producer = KafkaProducer(**kafka_common)
-        producer.send(topic, key=run_id.encode("utf-8"), value=payload)
-        producer.flush(timeout=10)
+        # Ensure partition assignment before producing, so "latest" starts after subscribe.
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            consumer.poll(0.2)
+            if consumer.assignment():
+                break
+
+        producer = Producer(producer_conf)
+        producer.produce(topic=topic, key=key, value=payload)
+        producer.flush(10)
 
         found = False
         deadline = time.time() + timeout_s
         while time.time() < deadline and not found:
-            for msg in consumer:
-                if msg.value == payload:
-                    found = True
-                    break
-            # Loop continues until deadline; consumer_timeout_ms prevents blocking forever.
+            msg = consumer.poll(1.0)
+            if msg is None:
+                continue
+            if msg.error():
+                if msg.error().code() == KafkaError._PARTITION_EOF:
+                    continue
+                logging.error("Kafka consume error: %s", msg.error())
+                continue
+            if msg.value() == payload:
+                found = True
+                break
 
         try:
             consumer.close()
@@ -176,7 +189,7 @@ def test_kafka_read_write(
         except Exception:
             pass
 
-        print(f"Kafka bootstrap: {bootstrap_servers}")
+        logging.info("Kafka bootstrap: %s", bootstrap_servers)
         logging.info("Topic: %s", topic)
         logging.info("Produced: %r", payload)
         logging.info("Consumed: %s", "OK" if found else "FAILED (timeout)")
