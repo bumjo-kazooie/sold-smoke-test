@@ -2,12 +2,39 @@
 import ssl
 _orig = ssl.create_default_context
 
-def patched(args, *kwargs):
-    ctx = _orig(args, *kwargs)
+def patched(*args, **kwargs):
+    # Wrapper for ssl.create_default_context.
+    # - By default: keep standard CA verification behavior.
+    # - When KAFKA_INSECURE_SKIP_VERIFY=1: disable CA verification as well (debug only).
+    # This must accept arbitrary args/kwargs to match the stdlib signature.
+    ctx = _orig(*args, **kwargs)
     try:
         ctx.check_hostname = False
     except Exception:
         pass
+
+    # Kafka sometimes fails SASL_SSL TLS handshakes if legacy TLS is offered/negotiated.
+    # Align with the fix from kafka-python issue #1206: disable TLSv1/TLSv1.1 by requiring TLSv1.2+.
+    try:
+        # Python 3.7+: prefer minimum_version for correctness.
+        if hasattr(ctx, "minimum_version"):
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        else:
+            # Fallback for older Python builds: explicitly disable legacy protocol versions.
+            if hasattr(ssl, "OP_NO_TLSv1"):
+                ctx.options |= ssl.OP_NO_TLSv1
+            if hasattr(ssl, "OP_NO_TLSv1_1"):
+                ctx.options |= ssl.OP_NO_TLSv1_1
+    except Exception:
+        pass
+
+    import os
+    if os.getenv("KAFKA_INSECURE_SKIP_VERIFY", "0").lower() in ("1", "true", "yes"):
+        # Disable certificate chain validation (debug only; reduces security).
+        try:
+            ctx.verify_mode = ssl.CERT_NONE
+        except Exception:
+            pass
     return ctx
 
 ssl.create_default_context = patched
@@ -19,12 +46,19 @@ def setup_logging() -> None:
 
     level_name = os.getenv("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
+    # Force our config so earlier library imports can't "win" and hide Kafka debug logs.
     logging.basicConfig(
         level=level,
+        force=True,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Also ensure the root logger is set to the requested level.
+    logging.getLogger().setLevel(level)
     # kafka-python uses the "kafka" logger namespace.
     logging.getLogger("kafka").setLevel(level)
+    # kafka-python-ng typically still logs under the same `kafka` module name,
+    # but this doesn't hurt if it uses a different logger namespace.
+    logging.getLogger("kafka-python-ng").setLevel(level)
 
 
 def test_playwright_connection(url: str = "https://sozd.duma.gov.ru") -> int:
@@ -155,6 +189,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Connectivity checks (Playwright + Kafka).")
     parser.add_argument("--playwright", action="store_true", help="Run Playwright HTTPS check.")
     parser.add_argument("--kafka", action="store_true", help="Run Kafka read/write check.")
+    parser.add_argument(
+        "--interval-s",
+        type=float,
+        default=float(os.getenv("INTERVAL_S", "600")),
+        help="How often to re-run checks (seconds). Default: 600 (10 min).",
+    )
+    parser.add_argument("--once", action="store_true", help="Run checks once and exit.")
     parser.add_argument("--url", default=os.getenv("SOZD_URL", "https://sozd.duma.gov.ru"))
     parser.add_argument("--kafka-bootstrap", default=os.getenv("KAFKA_BOOTSTRAP", "localhost:9092"))
     parser.add_argument("--kafka-topic", default=os.getenv("KAFKA_TOPIC", "sozd-connection-test"))
@@ -171,24 +212,39 @@ if __name__ == "__main__":
     run_playwright = args.playwright or (not args.playwright and not args.kafka)
     run_kafka = args.kafka or (not args.playwright and not args.kafka)
 
-    rc = 0
-    if run_playwright:
-        rc = max(rc, test_playwright_connection(args.url))
-    if run_kafka:
-        rc = max(
-            rc,
-            test_kafka_read_write(
-                args.kafka_bootstrap,
-                args.kafka_topic,
-                timeout_s=args.kafka_timeout,
-                security_protocol=args.kafka_security_protocol,
-                sasl_mechanism=args.kafka_sasl_mechanism,
-                sasl_plain_username=args.kafka_sasl_username,
-                sasl_plain_password=args.kafka_sasl_password,
-                ssl_cafile=args.kafka_ssl_cafile,
-                ssl_certfile=args.kafka_ssl_certfile,
-                ssl_keyfile=args.kafka_ssl_keyfile,
-            ),
-        )
+    import time
 
-    raise SystemExit(rc)
+    interval_s = max(0.0, float(args.interval_s))
+    once = bool(args.once)
+    run_no = 0
+
+    while True:
+        run_no += 1
+        print(f"[smoke_test] run #{run_no} starting")
+
+        rc = 0
+        if run_playwright:
+            rc = max(rc, test_playwright_connection(args.url))
+        if run_kafka:
+            rc = max(
+                rc,
+                test_kafka_read_write(
+                    args.kafka_bootstrap,
+                    args.kafka_topic,
+                    timeout_s=args.kafka_timeout,
+                    security_protocol=args.kafka_security_protocol,
+                    sasl_mechanism=args.kafka_sasl_mechanism,
+                    sasl_plain_username=args.kafka_sasl_username,
+                    sasl_plain_password=args.kafka_sasl_password,
+                    ssl_cafile=args.kafka_ssl_cafile,
+                    ssl_certfile=args.kafka_ssl_certfile,
+                    ssl_keyfile=args.kafka_ssl_keyfile,
+                ),
+            )
+
+        print(f"[smoke_test] run #{run_no} finished rc={rc}")
+        if once:
+            raise SystemExit(rc)
+
+        # Sleep before next run. If interval_s is 0, loop again immediately.
+        time.sleep(interval_s)
