@@ -13,6 +13,20 @@ def patched(args, *kwargs):
 ssl.create_default_context = patched
 
 
+def setup_logging() -> None:
+    import logging
+    import os
+
+    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    # kafka-python uses the "kafka" logger namespace.
+    logging.getLogger("kafka").setLevel(level)
+
+
 def test_playwright_connection(url: str = "https://sozd.duma.gov.ru") -> int:
     try:
         from playwright.sync_api import sync_playwright
@@ -135,6 +149,8 @@ def test_kafka_read_write(
 if __name__ == "__main__":
     import argparse
     import os
+
+    setup_logging()
 
     parser = argparse.ArgumentParser(description="Connectivity checks (Playwright + Kafka).")
     parser.add_argument("--playwright", action="store_true", help="Run Playwright HTTPS check.")
